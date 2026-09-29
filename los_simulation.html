@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Length of stay: adding versus multiplying effects</title>
+<style>
+  body { font-family: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif; color: #1d2430; background: #fbfbf9; margin: 0; }
+  main { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 0.25rem; }
+  .sub { color: #5b6270; margin: 0 0 1.5rem; }
+  .row { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; }
+  .row label { min-width: 250px; color: #3b4250; }
+  .row input { flex: 1; }
+  .row span { min-width: 48px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  button { font: inherit; padding: 6px 14px; border: 1px solid #b9bcc4; background: #fff; border-radius: 6px; cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 2px solid #2a78d6; outline-offset: 2px; }
+  h2 { font-size: 1.15rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 8px; }
+  .stat { background: #f0f1ee; border-radius: 6px; padding: 8px 12px; }
+  .stat small { display: block; color: #5b6270; }
+  .stat b { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+  .chart { position: relative; height: 220px; }
+  .note { color: #5b6270; font-size: 0.9rem; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Length of stay: adding versus multiplying effects</h1>
+<p class="sub">10,000 simulated patients, baseline stay of 4 days. Each factor pushes the stay up or down with probability 1/2.</p>
+
+<div class="row"><label for="k">Number of factors</label><input type="range" id="k" min="1" max="30" step="1" value="10"><span id="kv"></span></div>
+<div class="row"><label for="d">Additive effect (± days per factor)</label><input type="range" id="d" min="0.1" max="1" step="0.05" value="0.3"><span id="dv"></span></div>
+<div class="row"><label for="r">Multiplicative effect (× or ÷ per factor)</label><input type="range" id="r" min="1.05" max="1.6" step="0.05" value="1.25"><span id="rv"></span></div>
+<button id="rerun">New sample</button>
+
+<h2>Story 1: factors add days</h2>
+<div class="stats">
+  <div class="stat"><small>Median</small><b id="aMed"></b></div>
+  <div class="stat"><small>Mean</small><b id="aMean"></b></div>
+  <div class="stat"><small>Min to max</small><b id="aRange"></b></div>
+  <div class="stat"><small>Stays below 0 days</small><b id="aNeg"></b></div>
+</div>
+<div class="chart"><canvas id="c1" role="img" aria-label="Histogram of LOS under additive effects"></canvas></div>
+
+<h2>Story 2: factors multiply days</h2>
+<div class="stats">
+  <div class="stat"><small>Median</small><b id="mMed"></b></div>
+  <div class="stat"><small>Mean</small><b id="mMean"></b></div>
+  <div class="stat"><small>Min to max</small><b id="mRange"></b></div>
+  <div class="stat"><small>Mean minus median</small><b id="mGap"></b></div>
+</div>
+<div class="chart"><canvas id="c2" role="img" aria-label="Histogram of LOS under multiplicative effects"></canvas></div>
+<p class="note">Horizontal axis truncated at the 99.5th percentile so the bulk of the distribution stays visible.</p>
+
+<h2>Story 2 on the log scale</h2>
+<div class="chart"><canvas id="c3" role="img" aria-label="Histogram of log LOS under multiplicative effects"></canvas></div>
+
+<h2>Normal QQ plots for Story 2</h2>
+<p class="note">Sorted values against standard normal quantiles, with a reference line through the quartiles. Points are a random subsample of 1,000 patients. Because each factor is a coin flip, the data take only K + 1 distinct values, so the plots are staircases; what matters is whether the staircase follows the line.</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:8px">
+  <div><div class="chart"><canvas id="q1" role="img" aria-label="Normal QQ plot of raw LOS, bending upward"></canvas></div><p class="note">Raw LOS: bends upward, indicating right skew</p></div>
+  <div><div class="chart"><canvas id="q2" role="img" aria-label="Normal QQ plot of log LOS, following the line"></canvas></div><p class="note">log(LOS): follows the line, consistent with normality</p></div>
+</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const N = 10000, BASE = 4;
+const $ = id => document.getElementById(id);
+
+function hist(x, lo, hi, nb) {
+  const w = (hi - lo) / nb, c = new Array(nb).fill(0);
+  for (const v of x) {
+    if (v < lo || v > hi) continue;
+    let i = Math.floor((v - lo) / w);
+    if (i >= nb) i = nb - 1;
+    c[i]++;
+  }
+  const dp = Math.abs(hi - lo) < 5 ? 2 : 1;
+  return { labels: c.map((_, i) => (lo + (i + 0.5) * w).toFixed(dp)), counts: c };
+}
+
+function makeChart(id, color, xTitle) {
+  return new Chart($(id), {
+    type: 'bar',
+    data: { labels: [], datasets: [{ data: [], backgroundColor: color, barPercentage: 1, categoryPercentage: 0.95 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8, maxRotation: 0 }, grid: { display: false }, title: { display: true, text: xTitle } },
+        y: { title: { display: true, text: 'Patients' } }
+      }
+    }
+  });
+}
+
+const ch1 = makeChart('c1', '#2a78d6', 'LOS (days)');
+const ch2 = makeChart('c2', '#eb6834', 'LOS (days)');
+const ch3 = makeChart('c3', '#1baf7a', 'log(LOS)');
+
+function qnorm(p) {
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.3577518672690, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pl = 0.02425;
+  let q, r;
+  if (p < pl) { q = Math.sqrt(-2 * Math.log(p)); return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+  if (p > 1 - pl) { q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+  q = p - 0.5; r = q * q;
+  return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+}
+
+function makeQQ(id, color, yTitle) {
+  return new Chart($(id), {
+    type: 'scatter',
+    data: { datasets: [
+      { data: [], backgroundColor: color, pointRadius: 2 },
+      { type: 'line', data: [], borderColor: '#1d2430', borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0 }
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { type: 'linear', title: { display: true, text: 'Standard normal quantiles' } },
+        y: { title: { display: true, text: yTitle } }
+      }
+    }
+  });
+}
+
+function qqData(values) {
+  const n = 1000, sub = [];
+  for (let i = 0; i < n; i++) sub.push(values[Math.floor(Math.random() * values.length)]);
+  sub.sort((x, y) => x - y);
+  const pts = sub.map((v, i) => ({ x: qnorm((i + 0.5) / n), y: v }));
+  const q25 = sub[Math.floor(0.25 * n)], q75 = sub[Math.floor(0.75 * n)];
+  const slope = (q75 - q25) / (qnorm(0.75) - qnorm(0.25));
+  const intercept = q25 - slope * qnorm(0.25);
+  const xs = [pts[0].x, pts[n - 1].x];
+  return { pts, line: xs.map(x => ({ x, y: intercept + slope * x })) };
+}
+
+const qq1 = makeQQ('q1', '#eb6834', 'LOS (days)');
+const qq2 = makeQQ('q2', '#1baf7a', 'log(LOS)');
+
+const quantile = (s, p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+const mean = s => s.reduce((a, b) => a + b, 0) / s.length;
+
+function run() {
+  const K = +$('k').value, D = +$('d').value, R = +$('r').value;
+  $('kv').textContent = K; $('dv').textContent = D.toFixed(2); $('rv').textContent = R.toFixed(2);
+
+  const A = [], M = [], L = [];
+  for (let i = 0; i < N; i++) {
+    let a = BASE, m = BASE;
+    for (let j = 0; j < K; j++) {
+      if (Math.random() < 0.5) { a += D; m *= R; } else { a -= D; m /= R; }
+    }
+    A.push(a); M.push(m); L.push(Math.log(m));
+  }
+  A.sort((x, y) => x - y); M.sort((x, y) => x - y); L.sort((x, y) => x - y);
+
+  $('aMed').textContent = quantile(A, 0.5).toFixed(2);
+  $('aMean').textContent = mean(A).toFixed(2);
+  $('aRange').textContent = A[0].toFixed(1) + ' to ' + A[N - 1].toFixed(1);
+  $('aNeg').textContent = (100 * A.filter(v => v < 0).length / N).toFixed(1) + '%';
+
+  const mMean = mean(M), mMed = quantile(M, 0.5);
+  $('mMed').textContent = mMed.toFixed(2);
+  $('mMean').textContent = mMean.toFixed(2);
+  $('mRange').textContent = M[0].toFixed(1) + ' to ' + M[N - 1].toFixed(1);
+  $('mGap').textContent = (mMean - mMed).toFixed(2) + ' days';
+
+  const nb = Math.min(40, K + 1);
+  let h = hist(A, A[0] - 1e-9, A[N - 1] + 1e-9, nb);
+  ch1.data.labels = h.labels; ch1.data.datasets[0].data = h.counts; ch1.update();
+  h = hist(M, 0, quantile(M, 0.995), 40);
+  ch2.data.labels = h.labels; ch2.data.datasets[0].data = h.counts; ch2.update();
+  h = hist(L, L[0] - 1e-9, L[N - 1] + 1e-9, nb);
+  ch3.data.labels = h.labels; ch3.data.datasets[0].data = h.counts; ch3.update();
+
+  let qd = qqData(M);
+  qq1.data.datasets[0].data = qd.pts; qq1.data.datasets[1].data = qd.line; qq1.update();
+  qd = qqData(L);
+  qq2.data.datasets[0].data = qd.pts; qq2.data.datasets[1].data = qd.line; qq2.update();
+}
+
+['k', 'd', 'r'].forEach(id => $(id).addEventListener('input', run));
+$('rerun').addEventListener('click', run);
+run();
+</script>
+</body>
+</html>
